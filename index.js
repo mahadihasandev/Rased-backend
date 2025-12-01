@@ -1,126 +1,98 @@
+// index.js (root) - Vercel Serverless Compatible
+
 const express = require('express')
-const app = express()
-const port = 3000
+const serverless = require('serverless-http')
 const mongoose = require('mongoose')
 const multer = require('multer')
 const axios = require('axios')
 const FormData = require('form-data')
-const Product = require('./models/Product')
 const cors = require('cors')
+const Product = require('./models/Product')
 
-// Middleware
+const app = express()
+
 app.use(cors())
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
-// MongoDB Connection
-mongoose.connect('mongodb+srv://arnob1all_db_user:Trmaz3gmBbzwJhQR@cluster0.gdukj7w.mongodb.net/?appName=Cluster00')
-  .then(() => console.log("Connected to MongoDB"))
-  .catch(err => console.error("MongoDB connection error:", err))
+// ---------- DB CONNECTION (REQUIRED FOR VERCEL) ----------
+let cached = global.mongoose
+async function connectDB() {
+  if (cached) return cached
 
-// ⭐ Multer memory storage (Vercel compatible)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: function (req, file, cb) {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/
-    const extname = allowedTypes.test(file.originalname.toLowerCase())
-    const mimetype = allowedTypes.test(file.mimetype)
-
-    if (mimetype && extname) cb(null, true)
-    else cb(new Error("Only image files allowed"))
-  }
-})
-
-const IMGBB_API_KEY = "b8677abbae2ff97c1e283ac5225c6a02"
-
-// ⭐ Upload buffer directly to IMGBB (no disk usage)
-async function uploadToImgbbBuffer(buffer) {
-  try {
-    const formData = new FormData()
-    formData.append("image", buffer.toString("base64"))
-    formData.append("key", IMGBB_API_KEY)
-
-    const response = await axios.post(
-      "https://api.imgbb.com/1/upload",
-      formData,
-      { headers: formData.getHeaders() }
-    )
-
-    if (response.data.success) return response.data.data.url
-    else throw new Error("IMGBB upload failed")
-  } catch (err) {
-    console.log("Error uploading:", err.message)
-    throw err
-  }
+  cached = await mongoose.connect(process.env.MONGODB_URI || "YOUR_MONGO_URL")
+  return cached
 }
 
-// ⭐ Create Product
+// ---------- MULTER MEMORY STORAGE ----------
+const upload = multer({
+  storage: multer.memoryStorage()
+})
+
+// ---------- UPLOAD IMAGE TO IMGBB ----------
+async function uploadToImgbb(buffer) {
+  const form = new FormData()
+  form.append("key", process.env.IMGBB_API_KEY)
+  form.append("image", buffer.toString("base64"))
+
+  const res = await axios.post("https://api.imgbb.com/1/upload", form, {
+    headers: form.getHeaders()
+  })
+
+  return res.data.data.url
+}
+
+// ---------- CREATE PRODUCT ----------
 app.post('/api/products', upload.array("images", 10), async (req, res) => {
   try {
-    const { name, price } = req.body
+    await connectDB()
 
-    if (!name || !price)
-      return res.status(400).json({ error: "Name & price required" })
+    const urls = []
 
-    if (!req.files || req.files.length === 0)
-      return res.status(400).json({ error: "At least one image required" })
-
-    const imageUrls = []
-
-    // Upload each file buffer to imgbb
     for (const file of req.files) {
-      const url = await uploadToImgbbBuffer(file.buffer)
-      imageUrls.push(url)
+      const url = await uploadToImgbb(file.buffer)
+      urls.push(url)
     }
 
-    // Save product
-    const product = new Product({
-      name: name.trim(),
-      price: parseFloat(price),
-      images: imageUrls
+    const product = await Product.create({
+      name: req.body.name,
+      price: req.body.price,
+      images: urls
     })
 
-    const saved = await product.save()
+    res.json({ message: "Created", product })
 
-    res.status(201).json({
-      message: "Product created successfully",
-      product: saved
-    })
-
-  } catch (err) {
-    console.log(err)
-    res.status(500).json({
-      error: "Internal server error",
-      message: err.message
-    })
-  }
-})
-
-// ⭐ Get all products
-app.get('/', async (req, res) => {
-  try {
-    const products = await Product.find().sort({ createdAt: -1 })
-    res.json({ count: products.length, products })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-// ⭐ Delete product
+// ---------- GET ALL PRODUCTS ----------
+app.get('/api/products', async (req, res) => {
+  try {
+    await connectDB()
+    const products = await Product.find().sort({ createdAt: -1 })
+    res.json(products)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ---------- DELETE PRODUCT ----------
 app.delete('/api/products/:id', async (req, res) => {
   try {
-    const { id } = req.params
+    await connectDB()
 
-    const product = await Product.findByIdAndDelete(id)
+    const deleted = await Product.findByIdAndDelete(req.params.id)
 
-    if (!product)
-      return res.status(404).json({ error: "Product not found" })
+    if (!deleted) return res.status(404).json({ error: "Not found" })
 
-    res.json({ message: "Deleted successfully", product })
+    res.json({ message: "Deleted", product: deleted })
+
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-app.listen(port, () => console.log(`Server running on ${port}`))
+// ---------- EXPORT SERVERLESS HANDLER ----------
+module.exports = serverless(app)
