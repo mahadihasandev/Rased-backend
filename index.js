@@ -5,11 +5,8 @@ const mongoose = require('mongoose')
 const multer = require('multer')
 const axios = require('axios')
 const FormData = require('form-data')
-const fs = require('fs')
-const path = require('path')
 const Product = require('./models/Product')
-const cors = require('cors');
-const productSchema=require("./models/Product")
+const cors = require('cors')
 
 // Middleware
 app.use(cors())
@@ -21,202 +18,109 @@ mongoose.connect('mongodb+srv://arnob1all_db_user:Trmaz3gmBbzwJhQR@cluster0.gduk
   .then(() => console.log("Connected to MongoDB"))
   .catch(err => console.error("MongoDB connection error:", err))
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = 'uploads/'
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true })
-    }
-    cb(null, uploadDir)
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname))
-  }
-})
-
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+// ⭐ Multer memory storage (Vercel compatible)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: function (req, file, cb) {
     const allowedTypes = /jpeg|jpg|png|gif|webp/
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase())
+    const extname = allowedTypes.test(file.originalname.toLowerCase())
     const mimetype = allowedTypes.test(file.mimetype)
-    
-    if (mimetype && extname) {
-      return cb(null, true)
-    } else {
-      cb(new Error('Only image files are allowed!'))
-    }
+
+    if (mimetype && extname) cb(null, true)
+    else cb(new Error("Only image files allowed"))
   }
 })
 
-// IMGBB API Key - Get your free API key from https://api.imgbb.com/
-// You can also set this as an environment variable: process.env.IMGBB_API_KEY
-const IMGBB_API_KEY = 'b8677abbae2ff97c1e283ac5225c6a02' // Replace with your API key
+const IMGBB_API_KEY = "b8677abbae2ff97c1e283ac5225c6a02"
 
-// Function to upload image to imgbb
-async function uploadToImgbb(imagePath) {
+// ⭐ Upload buffer directly to IMGBB (no disk usage)
+async function uploadToImgbbBuffer(buffer) {
   try {
     const formData = new FormData()
-    formData.append('image', fs.createReadStream(imagePath))
-    formData.append('key', IMGBB_API_KEY)
+    formData.append("image", buffer.toString("base64"))
+    formData.append("key", IMGBB_API_KEY)
 
-    const response = await axios.post('https://api.imgbb.com/1/upload', formData, {
-      headers: formData.getHeaders()
-    })
+    const response = await axios.post(
+      "https://api.imgbb.com/1/upload",
+      formData,
+      { headers: formData.getHeaders() }
+    )
 
-    if (response.data.success) {
-      return response.data.data.url
-    } else {
-      throw new Error('Image upload failed')
-    }
-  } catch (error) {
-    console.error('Error uploading to imgbb:', error.message)
-    throw error
+    if (response.data.success) return response.data.data.url
+    else throw new Error("IMGBB upload failed")
+  } catch (err) {
+    console.log("Error uploading:", err.message)
+    throw err
   }
 }
 
-// POST endpoint to create a product with multiple images
-app.post('/api/products', upload.array('images', 10), async (req, res) => {
+// ⭐ Create Product
+app.post('/api/products', upload.array("images", 10), async (req, res) => {
   try {
     const { name, price } = req.body
 
-    // Validation
-    if (!name || !price) {
-      return res.status(400).json({ 
-        error: 'Product name and price are required' 
-      })
-    }
+    if (!name || !price)
+      return res.status(400).json({ error: "Name & price required" })
 
-    if (isNaN(price) || parseFloat(price) < 0) {
-      return res.status(400).json({ 
-        error: 'Price must be a valid positive number' 
-      })
-    }
+    if (!req.files || req.files.length === 0)
+      return res.status(400).json({ error: "At least one image required" })
 
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ 
-        error: 'At least one image is required' 
-      })
-    }
-
-    // Upload images to imgbb
     const imageUrls = []
-    const uploadedFiles = []
 
+    // Upload each file buffer to imgbb
     for (const file of req.files) {
-      try {
-        const imageUrl = await uploadToImgbb(file.path)
-        imageUrls.push(imageUrl)
-        uploadedFiles.push(file.path)
-      } catch (error) {
-        // Clean up uploaded files on error
-        uploadedFiles.forEach(filePath => {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath)
-          }
-        })
-        return res.status(500).json({ 
-          error: 'Failed to upload images. Please check your IMGBB_API_KEY.' 
-        })
-      }
+      const url = await uploadToImgbbBuffer(file.buffer)
+      imageUrls.push(url)
     }
 
-    // Clean up local files after successful upload
-    uploadedFiles.forEach(filePath => {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath)
-      }
-    })
-
-    // Create product in database
-    const product =await new productSchema({
+    // Save product
+    const product = new Product({
       name: name.trim(),
       price: parseFloat(price),
       images: imageUrls
     })
 
-    const savedProduct = await product.save()
+    const saved = await product.save()
 
     res.status(201).json({
-      message: 'Product created successfully',
-      product: savedProduct
+      message: "Product created successfully",
+      product: saved
     })
 
-  } catch (error) {
-    console.error('Error creating product:', error)
-    
-    // Clean up any remaining files
-    if (req.files) {
-      req.files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path)
-        }
-      })
-    }
-
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
+  } catch (err) {
+    console.log(err)
+    res.status(500).json({
+      error: "Internal server error",
+      message: err.message
     })
   }
 })
 
-// GET endpoint to retrieve all products
+// ⭐ Get all products
 app.get('/', async (req, res) => {
   try {
     const products = await Product.find().sort({ createdAt: -1 })
-    
-    res.status(200).json({
-      count: products.length,
-      products: products
-    })
-  } catch (error) {
-    console.error('Error fetching products:', error)
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
-    })
+    res.json({ count: products.length, products })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
   }
 })
 
-// DELETE endpoint to delete a product by ID
+// ⭐ Delete product
 app.delete('/api/products/:id', async (req, res) => {
   try {
     const { id } = req.params
 
-    // Validate MongoDB ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ 
-        error: 'Invalid product ID format' 
-      })
-    }
-
-    // Find and delete the product
     const product = await Product.findByIdAndDelete(id)
 
-    if (!product) {
-      return res.status(404).json({ 
-        error: 'Product not found' 
-      })
-    }
+    if (!product)
+      return res.status(404).json({ error: "Product not found" })
 
-    res.status(200).json({
-      message: 'Product deleted successfully',
-      product: product
-    })
-
-  } catch (error) {
-    console.error('Error deleting product:', error)
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
-    })
+    res.json({ message: "Deleted successfully", product })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
   }
 })
 
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`)
-})
+app.listen(port, () => console.log(`Server running on ${port}`))
