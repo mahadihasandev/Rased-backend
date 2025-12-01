@@ -68,7 +68,7 @@ app.post('/api/products', upload.array("images", 10), async (req, res) => {
 })
 
 // ---------- GET ALL PRODUCTS ----------
-app.get('/api/products', async (req, res) => {
+app.get('/', async (req, res) => {
   try {
     await connectDB()
     const products = await Product.find().sort({ createdAt: -1 })
