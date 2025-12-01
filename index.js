@@ -8,8 +8,8 @@ const FormData = require('form-data')
 const fs = require('fs')
 const path = require('path')
 const Product = require('./models/Product')
-  const cors = require('cors');
-  const productSchema=require("./models/Product")
+const cors = require('cors');
+const productSchema=require("./models/Product")
 
 // Middleware
 app.use(cors())
