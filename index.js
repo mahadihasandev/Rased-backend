@@ -165,7 +165,7 @@ app.post('/api/products', upload.array('images', 10), async (req, res) => {
 })
 
 // GET endpoint to retrieve all products
-app.get('/api/get/products', async (req, res) => {
+app.get('/', async (req, res) => {
   try {
     const products = await Product.find().sort({ createdAt: -1 })
     
